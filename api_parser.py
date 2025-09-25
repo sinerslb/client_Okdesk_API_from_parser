@@ -1,7 +1,8 @@
-from bs4 import BeautifulSoup
 import json
-import requests
+import traceback
 from urllib.parse import urldefrag, urljoin
+from bs4 import BeautifulSoup
+import requests
 
 
 def get_the_endpoint_structure_with_links_to_docs(
@@ -89,7 +90,11 @@ def get_parsed_api_data(
             base_url
         )
     except Exception as ex:
-        api_data['error'] = str(ex)
+        ex_traceback = traceback.format_exc()
+        api_data = {
+            'error': str(ex),
+            'traceback': ex_traceback
+        }
     return api_data
 
 
