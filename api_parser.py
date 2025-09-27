@@ -1,26 +1,120 @@
 import json
 import traceback
+from typing import Iterator
 from urllib.parse import urldefrag, urljoin
-from bs4 import BeautifulSoup
-from bs4.element import Tag, PageElement, NavigableString, ResultSet
-import requests
 
+import requests
+from bs4 import BeautifulSoup
+from bs4.element import NavigableString, PageElement, ResultSet, Tag
 
 Result_set = ResultSet[PageElement | Tag | NavigableString]
 
 
+def get_one_element_class_tag(
+        element: PageElement | None
+) -> Tag:
+    """Return element of class Tag.
+
+    Args:
+        element (PageElement | None): result Tag.find()
+
+    Returns:
+        Tag: The same element as in the input,
+            but for mypy it already belongs to the Tag class
+
+    The function is needed only to prevent type errors.
+    The code can work without it, but mypy throws errors.
+    Since the page being analyzed is already known,
+    an exception will never be thrown.
+    """
+    if not isinstance(element, Tag):
+        raise Exception
+    return element
+
+
 def get_elements_of_class_tag(
-        elements: Result_set
+        elements: Result_set | Iterator[PageElement]
 ) -> list[Tag]:
+    """Return all elements of class Tag from the given iterator.
+
+    Args:
+        elements (Result_set | Iterator[PageElement]): result Tag.find_all(),
+            or Tag.children
+
+    Returns:
+        list[Tag]: The same elements as in the input data,
+            but for mypy they already belong to the Tag class
+
+    The function is needed only to prevent type errors.
+    The code can work without it, but mypy throws errors.
+    """
     return [
         tag for tag in elements if isinstance(tag, Tag)
     ]
 
 
+def parse_a_section(
+        section_element: Tag,
+        dict_links_to_docs: dict
+) -> dict[str, dict[str, str | list[list[str | list[str]]]]]:
+    """Parses section.
+
+    Args:
+        section_element (Tag): web element 'section'
+        section_data (dict[str, dict[str, str]]): dictionary with sections data
+    """
+    section_data: dict[str, dict[str, str | list[list[str | list[str]]]]] = {}
+    resources = get_elements_of_class_tag(
+        section_element.find_all(class_='resource')
+    )
+    section_h2 = get_one_element_class_tag(
+        section_element.find('h2')
+    )
+    section_name = section_h2.text.replace(' ¶', '')
+    for resource in resources:
+        endpoints = get_elements_of_class_tag(resource.children)
+        for endpoint in endpoints:
+            ep_children: list[Tag] = get_elements_of_class_tag(
+                endpoint.children
+            )
+            endpoint_name = ep_children[0].text
+            section_data[endpoint_name] = {}
+            endpoint_data = section_data[endpoint_name]
+            ep_url_data: list[Tag] = get_elements_of_class_tag(
+                ep_children[1].children
+            )
+            link_to_doc = dict_links_to_docs[section_name][endpoint_name]
+            endpoint_data['link_to_the_doc'] = link_to_doc
+            endpoint_data['method'] = ep_url_data[0].text
+            endpoint_data['uri'] = ep_url_data[1].text
+            endpoint_data['description'] = []
+    return section_data
+
+
+def get_okdesk_api_data(
+            content: Tag,
+            dict_links_to_docs: dict
+) -> dict[str, dict[str, dict[str, str | list[list[str | list[str]]]]]]:
+    api_data = {}
+    sections = get_elements_of_class_tag(
+        content.find_all('section')
+    )
+    for section in sections:
+        section_group_heading = get_one_element_class_tag(
+            section.find(class_='group-heading')
+        )
+        section_name = section_group_heading.text.replace(' ¶', '')
+        api_data[section_name] = parse_a_section(
+            section,
+            dict_links_to_docs
+        )
+    return api_data
+
+
 def get_the_endpoint_structure_with_links_to_docs(
-        soup: BeautifulSoup,
+        nav: Tag,
         base_url: str
-    ) -> dict[str, dict[str, dict[str, str]]]:
+) -> dict[str, dict[str, dict[str, str]]]:
     """Return the documentation data structure and links to the site.
 
     Args:
@@ -35,7 +129,7 @@ def get_the_endpoint_structure_with_links_to_docs(
     """
     endpoint_structure = {}
     resource_groups = get_elements_of_class_tag(
-        soup.find_all(
+        nav.find_all(
             class_='resource-group'
         )
     )
@@ -54,12 +148,10 @@ def get_the_endpoint_structure_with_links_to_docs(
             [
                 (
                     rg_r_a_link.text,
-                    {
-                        'link_to_the_manual': urljoin(
+                    urljoin(
                             base_url,
                             str(rg_r_a_link['href'])
                         )
-                    }
                 ) for rg_r_a_link in rg_r_a_links
             ]
         )
@@ -101,9 +193,19 @@ def get_parsed_api_data(
             )
         okdesk_api_site.raise_for_status()
         soup = BeautifulSoup(okdesk_api_site.text, 'html.parser')
-        api_data = get_the_endpoint_structure_with_links_to_docs(
-            soup,
+        nav = get_one_element_class_tag(
+            soup.find('nav')
+        )
+        content = get_one_element_class_tag(
+            soup.find(class_='content')
+        )
+        api_structure = get_the_endpoint_structure_with_links_to_docs(
+            nav,
             base_url
+        )
+        api_data = get_okdesk_api_data(
+            content,
+            api_structure
         )
     except Exception as ex:
         ex_traceback = traceback.format_exc()
