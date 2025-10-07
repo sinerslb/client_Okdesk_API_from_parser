@@ -2,19 +2,7 @@ import json
 import traceback
 from urllib.parse import urldefrag, urljoin
 from bs4 import BeautifulSoup
-from bs4.element import Tag, PageElement, NavigableString, ResultSet
 import requests
-
-
-Result_set = ResultSet[PageElement | Tag | NavigableString]
-
-
-def get_elements_of_class_tag(
-        elements: Result_set
-) -> list[Tag]:
-    return [
-        tag for tag in elements if isinstance(tag, Tag)
-    ]
 
 
 def get_the_endpoint_structure_with_links_to_docs(
@@ -34,10 +22,8 @@ def get_the_endpoint_structure_with_links_to_docs(
         endpoints
     """
     endpoint_structure = {}
-    resource_groups = get_elements_of_class_tag(
-        soup.find_all(
-            class_='resource-group'
-        )
+    resource_groups = soup.find_all(
+        class_='resource-group'
     )
     for group in resource_groups:
         rg_link = group.find(
@@ -45,10 +31,8 @@ def get_the_endpoint_structure_with_links_to_docs(
         )
         if rg_link is None:
             continue
-        rg_r_a_links = get_elements_of_class_tag(
-            group.find_all(
-                class_='rg-r-a-link'
-            )
+        rg_r_a_links = group.find_all(
+            class_='rg-r-a-link'
         )
         endpoint_structure[rg_link.text] = dict(
             [
@@ -57,7 +41,7 @@ def get_the_endpoint_structure_with_links_to_docs(
                     {
                         'link_to_the_manual': urljoin(
                             base_url,
-                            str(rg_r_a_link['href'])
+                            rg_r_a_link['href']
                         )
                     }
                 ) for rg_r_a_link in rg_r_a_links
@@ -107,7 +91,7 @@ def get_parsed_api_data(
         )
     except Exception as ex:
         ex_traceback = traceback.format_exc()
-        return {
+        api_data = {
             'error': str(ex),
             'traceback': ex_traceback
         }
