@@ -1,52 +1,6 @@
-from bs4 import BeautifulSoup
 import json
 import requests
-from urllib.parse import urldefrag, urljoin
-
-
-def get_the_endpoint_structure_with_links_to_docs(
-        soup: BeautifulSoup,
-        base_url: str
-    ) -> dict[str, dict[str, dict[str, str]]]:
-    """Return the documentation data structure and links to the site.
-
-    Args:
-        soup (BeautifulSoup): a Beautifulsoup object with the parsed Okdesk API
-            documentation site
-        base_url (str): Okdesk API documentation website base URL
-
-    Returns:
-        dict[str, dict[str, dict[str, str]]]: dictionary of API documentation
-        sections, listing endpoints and links to descriptions of those
-        endpoints
-    """
-    endpoint_structure = {}
-    resource_groups = soup.find_all(
-        class_='resource-group'
-    )
-    for group in resource_groups:
-        rg_link = group.find(
-            class_='rg-link'
-        )
-        if rg_link is None:
-            continue
-        rg_r_a_links = group.find_all(
-            class_='rg-r-a-link'
-        )
-        endpoint_structure[rg_link.text] = dict(
-            [
-                (
-                    rg_r_a_link.text,
-                    {
-                        'link_to_the_manual': urljoin(
-                            base_url,
-                            rg_r_a_link['href']
-                        )
-                    }
-                ) for rg_r_a_link in rg_r_a_links
-            ]
-        )
-    return endpoint_structure
+from urllib.parse import urldefrag
 
 
 def get_base_url(
@@ -83,11 +37,6 @@ def get_parsed_api_data(
                 base_url
             )
         okdesk_api_site.raise_for_status()
-        soup = BeautifulSoup(okdesk_api_site.text, 'html.parser')
-        api_data = get_the_endpoint_structure_with_links_to_docs(
-            soup,
-            base_url
-        )
     except Exception as ex:
         api_data['error'] = str(ex)
     return api_data
