@@ -1,15 +1,27 @@
 import json
 import traceback
-from typing import Iterator, NotRequired, TypeAlias, TypedDict
+from typing import (
+    Iterator,
+    Literal,
+    NamedTuple,
+    NotRequired,
+    TypeAlias,
+    TypedDict,
+)
 from urllib.parse import urldefrag, urljoin
 
 import requests
 from bs4 import BeautifulSoup
 from bs4.element import PageElement, ResultSet, Tag
 
-Paragraph_or_note: TypeAlias = tuple[str, ...]
-Table_element: TypeAlias = tuple[str, list[list[str]]]
-Description: TypeAlias = list[Table_element | Paragraph_or_note]
+ItemOfDescription = NamedTuple(
+    "ItemOfDescription",
+    [
+        ("type_item", Literal["p", "h4", "note", "table"]),
+        ("value", tuple[str, ...] | list[list[str]] | str),
+    ],
+)
+Description: TypeAlias = list[ItemOfDescription]
 EndpointData = TypedDict(
     "EndpointData",
     {
@@ -72,7 +84,7 @@ def normalize_text(text: str) -> str:
     return " ".join(text.replace("¶", "").split())
 
 
-def _parse_note(note: Tag) -> Paragraph_or_note:
+def _parse_note(note: Tag) -> ItemOfDescription:
     """Parsing note element.
 
     Args:
@@ -83,11 +95,11 @@ def _parse_note(note: Tag) -> Paragraph_or_note:
             the zero position, and the note data
     """
     texts = (normalize_text(element.text) for element in note.children)
-    non_empty_texts = (text for text in texts if text.strip())
-    return ("note", *non_empty_texts)
+    non_empty_texts = tuple(text for text in texts if text.strip())
+    return ItemOfDescription("note", non_empty_texts)
 
 
-def _parse_table(table: Tag) -> Table_element:
+def _parse_table(table: Tag) -> ItemOfDescription:
     """Parsing table HTML element.
 
     Args:
@@ -103,7 +115,7 @@ def _parse_table(table: Tag) -> Table_element:
         cells = row.find_all(["td", "th"])
         row_data = [normalize_text(cell.text) for cell in cells]
         table_data.append(row_data)
-    return ("table", table_data)
+    return ItemOfDescription("table", table_data)
 
 
 def _parse_description(elements: list[Tag]) -> Description:
@@ -123,11 +135,15 @@ def _parse_description(elements: list[Tag]) -> Description:
     description: Description = []
     for element in elements:
         if element.name == "p":
-            description.append(("p", normalize_text(element.text)))
+            description.append(
+                ItemOfDescription("p", normalize_text(element.text))
+            )
         elif element.name == "h4" and "URI" in element.text:
             break
         elif element.name == "h4":
-            description.append(("h4", normalize_text(element.text)))
+            description.append(
+                ItemOfDescription("h4", normalize_text(element.text))
+            )
         elif element.name == "table":
             description.append(_parse_table(element))
         elif "note" in element.attrs.get("class", ""):
