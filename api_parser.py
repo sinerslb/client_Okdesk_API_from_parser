@@ -1,45 +1,39 @@
 import json
 import traceback
-from typing import (
-    Iterator,
-    Literal,
-    NamedTuple,
-    NotRequired,
-    TypeAlias,
-    TypedDict,
-)
+from typing import Iterator, Literal, NamedTuple, NotRequired, TypedDict
 from urllib.parse import urldefrag, urljoin
 
 import requests
 from bs4 import BeautifulSoup
 from bs4.element import PageElement, ResultSet, Tag
 
-ItemOfDescription = NamedTuple(
-    "ItemOfDescription",
-    [
-        ("type_item", Literal["p", "h4", "note", "table"]),
-        ("value", tuple[str, ...] | list[list[str]] | str),
-    ],
-)
-Description: TypeAlias = list[ItemOfDescription]
-EndpointData = TypedDict(
-    "EndpointData",
-    {
-        "endpoint_link": str,
-        "method": str,
-        "uri": str,
-        "description": Description,
-    },
-)
-ApiStructure: TypeAlias = dict[str, dict[str, EndpointData]]
-ParseResult = TypedDict(
-    "ParseResult",
-    {
-        "data": NotRequired[ApiStructure],
-        "error": NotRequired[str],
-        "traceback": NotRequired[str],
-    },
-)
+class DescriptionElement(NamedTuple):
+    type: Literal["p", "h4", "note", "table"]
+    value: str | tuple[str, ...] | tuple[tuple[str, ...], ...]
+
+
+class EndpointData(NamedTuple):
+    name: str
+    link_to_documentation: str
+    method: str
+    uri: str
+    description: tuple[DescriptionElement, ...]
+
+
+class SectionData(NamedTuple):
+    name: str
+    endpoints: tuple[EndpointData, ...]
+
+
+class ApiStructure(NamedTuple):
+    base_url: str
+    sections: tuple[SectionData, ...]
+
+
+class ParseResult(TypedDict):
+    data: NotRequired[ApiStructure]
+    error: NotRequired[str]
+    traceback: NotRequired[str]
 
 
 def ensure_tag(element: PageElement | None) -> Tag:
@@ -84,71 +78,49 @@ def normalize_text(text: str) -> str:
     return " ".join(text.replace("¶", "").split())
 
 
-def _parse_note(note: Tag) -> ItemOfDescription:
+def _parse_note(note: Tag) -> DescriptionElement:
     """Parsing note element.
-
-    Args:
-        note (Tag): "note"-class div HTML element
-
-    Returns:
-        Paragraph_or_note: a tuple with the element type "note" specified at
-            the zero position, and the note data
     """
     texts = (normalize_text(element.text) for element in note.children)
     non_empty_texts = tuple(text for text in texts if text.strip())
-    return ItemOfDescription("note", non_empty_texts)
+    return DescriptionElement("note", non_empty_texts)
 
 
-def _parse_table(table: Tag) -> ItemOfDescription:
+def _parse_table(table: Tag) -> DescriptionElement:
     """Parsing table HTML element.
-
-    Args:
-        table (Tag): <table> HTML element
-
-    Returns:
-        Table_element: a tuple with the element type "table" specified at
-            the zero position, and the table data
     """
-    table_data: list[list[str]] = []
+    table_data: list[tuple[str, ...]] = []
     table_rows = table.find_all("tr")
     for row in get_tags_only(table_rows):
         cells = row.find_all(["td", "th"])
-        row_data = [normalize_text(cell.text) for cell in cells]
+        row_data = tuple(normalize_text(cell.text) for cell in cells)
         table_data.append(row_data)
-    return ItemOfDescription("table", table_data)
+    return DescriptionElement("table", tuple(table_data))
 
 
-def _parse_description(elements: list[Tag]) -> Description:
+def _parse_description(elements: list[Tag]) -> tuple[DescriptionElement, ...]:
     """Parse endpoint description elements until URI example section.
 
     Processes 'p', 'h4', 'table', and 'note' elements, stopping when
     encountering an 'h4' element containing 'URI' text.
-
-    Args:
-        ep_children (list[Tag]): list of HTML elements
-            from endpoint documentation
-
-    Returns:
-        Description: structured description containing text,
-            headers, tables, and notes
     """
-    description: Description = []
+    description: list[DescriptionElement] = []
     for element in elements:
         if element.name == "p":
             description.append(
-                ItemOfDescription("p", normalize_text(element.text))
+                DescriptionElement("p", normalize_text(element.text))
             )
         elif element.name == "h4" and "URI" in element.text:
             break
         elif element.name == "h4":
             description.append(
-                ItemOfDescription("h4", normalize_text(element.text))
+                DescriptionElement("h4", normalize_text(element.text))
             )
         elif element.name == "table":
             description.append(_parse_table(element))
         elif "note" in element.attrs.get("class", ""):
             description.append(_parse_note(element))
-    return description
+    return tuple(description)
 
 
 def _extract_endpoint_metadata(
@@ -174,18 +146,8 @@ def _extract_endpoint_metadata(
 
 def _parse_endpoint(
     endpoint: Tag, endpoint_links: dict, section_name: str
-) -> tuple[str, EndpointData]:
+) -> EndpointData:
     """Parse individual endpoint element into structured data.
-
-    Args:
-        endpoint (Tag): "action"-class div HTML element
-        endpoint_links (dict): Dictionary mapping endpoint names
-            to documentation URLs
-        section_name (str): name of the parent section
-
-    Returns:
-        tuple[str, EndpointData]: endpoint name and endpoint data
-            (description, list of parameters, etc)
 
     Raises:
         ValueError: if an endpoint has fewer than three child elements
@@ -197,13 +159,13 @@ def _parse_endpoint(
         endpoint_children[:2]
     )
     endpoint_link = endpoint_links[section_name][ep_name]
-    endpoint_data: EndpointData = {
-        "endpoint_link": endpoint_link,
-        "method": ep_http_method,
-        "uri": ep_uri,
-        "description": _parse_description(endpoint_children[2:]),
-    }
-    return (ep_name, endpoint_data)
+    return EndpointData(
+        ep_name,
+        endpoint_link,
+        ep_http_method,
+        ep_uri,
+        _parse_description(endpoint_children[2:]),
+    )
 
 
 def _get_section_name(section_element: Tag) -> str:
@@ -220,27 +182,22 @@ def _get_section_name(section_element: Tag) -> str:
 
 def _parse_section(
     section_element: Tag, endpoint_links: dict
-) -> tuple[str, dict[str, EndpointData]]:
+) -> SectionData:
     """Parsing the section HTML element.
-
-    Args:
-        section_element (Tag): "section" HTML element
-        endpoint_links (dict): links to endpoint documentation,
-            divided into sections
-
-    Returns:
-        tuple[str, dict[str, EndpointData]]: the section name and
-            information about all section endpoints
     """
-    section_data: dict[str, EndpointData] = {}
+    endpoints_data: list[EndpointData] = []
     section_name = _get_section_name(section_element)
     endpoints = get_tags_only(section_element.find_all(class_="action"))
     for endpoint in endpoints:
-        endpoint_name, endpoint_data = _parse_endpoint(
-            endpoint, endpoint_links, section_name
+        endpoints_data.append(
+            _parse_endpoint(endpoint, endpoint_links, section_name)
         )
-        section_data[endpoint_name] = endpoint_data
-    return (section_name, section_data)
+    return SectionData(section_name, tuple(endpoints_data))
+
+
+def _extract_api_base_url(content: Tag) -> str:
+    hostname = ensure_tag(content.find("span", class_="hostname"))
+    return hostname.text
 
 
 def _get_okdesk_api_data(content: Tag, endpoint_links: dict) -> ApiStructure:
@@ -254,12 +211,12 @@ def _get_okdesk_api_data(content: Tag, endpoint_links: dict) -> ApiStructure:
         ApiStructure: structured information about API resources
             divided into sections
     """
-    api_data: ApiStructure = {}
+    api_data: list[SectionData] = []
+    api_base_url = _extract_api_base_url(content)
     sections = get_tags_only(content.find_all("section"))
     for section in sections:
-        section_name, section_data = _parse_section(section, endpoint_links)
-        api_data[section_name] = section_data
-    return api_data
+        api_data.append(_parse_section(section, endpoint_links))
+    return ApiStructure(api_base_url, tuple(api_data))
 
 
 def _parse_resource_group_data(group: Tag, base_url: str) -> dict[str, str]:
