@@ -1,4 +1,3 @@
-import json
 import traceback
 from typing import Iterator, Literal, NamedTuple, NotRequired, TypedDict
 from urllib.parse import urldefrag, urljoin
@@ -6,6 +5,11 @@ from urllib.parse import urldefrag, urljoin
 import requests
 from bs4 import BeautifulSoup
 from bs4.element import PageElement, ResultSet, Tag
+
+
+DEFAULT_API_DOCS_URL = "https://apidocs.okdesk.com/apidoc"
+TIMEOUT: int = 10
+
 
 class DescriptionElement(NamedTuple):
     type: Literal["p", "h4", "note", "table"]
@@ -144,24 +148,20 @@ def _extract_endpoint_metadata(
     )
 
 
-def _parse_endpoint(
-    endpoint: Tag, endpoint_links: dict, section_name: str
-) -> EndpointData:
+def _parse_endpoint(endpoint: Tag, base_url: str) -> EndpointData:
     """Parse individual endpoint element into structured data.
 
     Raises:
         ValueError: if an endpoint has fewer than three child elements
     """
     endpoint_children: list[Tag] = get_tags_only(endpoint.children)
-    if len(endpoint_children) < 3:
-        raise ValueError("Not enough elements to parse endpoint")
     ep_name, ep_http_method, ep_uri = _extract_endpoint_metadata(
         endpoint_children[:2]
     )
-    endpoint_link = endpoint_links[section_name][ep_name]
+    endpoint_doc_link = urljoin(base_url, f"#!{endpoint.get('id', '')}")
     return EndpointData(
         ep_name,
-        endpoint_link,
+        endpoint_doc_link,
         ep_http_method,
         ep_uri,
         _parse_description(endpoint_children[2:]),
@@ -180,18 +180,12 @@ def _get_section_name(section_element: Tag) -> str:
     return normalize_text(section_group_heading.text)
 
 
-def _parse_section(
-    section_element: Tag, endpoint_links: dict
-) -> SectionData:
-    """Parsing the section HTML element.
-    """
+def _parse_section(section_element: Tag, base_url: str) -> SectionData:
     endpoints_data: list[EndpointData] = []
     section_name = _get_section_name(section_element)
     endpoints = get_tags_only(section_element.find_all(class_="action"))
     for endpoint in endpoints:
-        endpoints_data.append(
-            _parse_endpoint(endpoint, endpoint_links, section_name)
-        )
+        endpoints_data.append(_parse_endpoint(endpoint, base_url))
     return SectionData(section_name, tuple(endpoints_data))
 
 
@@ -200,72 +194,18 @@ def _extract_api_base_url(content: Tag) -> str:
     return hostname.text
 
 
-def _get_okdesk_api_data(content: Tag, endpoint_links: dict) -> ApiStructure:
-    """Return parsed Okdesk API data.
-
-    Args:
-        content (Tag): "content"-class div HTML element
-        endpoint_links (dict): dictionary of endpoint documentation links
-
-    Returns:
-        ApiStructure: structured information about API resources
-            divided into sections
-    """
+def _parse_content_okdesk_api_doc_site(
+    base_url: str, content: Tag
+) -> ApiStructure:
     api_data: list[SectionData] = []
     api_base_url = _extract_api_base_url(content)
     sections = get_tags_only(content.find_all("section"))
     for section in sections:
-        api_data.append(_parse_section(section, endpoint_links))
+        api_data.append(_parse_section(section, base_url))
     return ApiStructure(api_base_url, tuple(api_data))
 
 
-def _parse_resource_group_data(group: Tag, base_url: str) -> dict[str, str]:
-    """Parsing the resource-group element.
-
-    Args:
-        group (Tag): "resource-group"-class div HTML element
-        base_url (str): The base URL of the Okdesk API documentation site
-
-    Returns:
-        dict[str, str]: {"endpoint name": "link to documentation"}
-    """
-    rg_r_a_links = get_tags_only(group.find_all(class_="rg-r-a-link"))
-    list_of_endpoint_links_pair = [
-        (rg_r_a_link.text, urljoin(base_url, str(rg_r_a_link["href"])))
-        for rg_r_a_link in rg_r_a_links
-    ]
-    return dict(list_of_endpoint_links_pair)
-
-
-def _parse_navigation_structure(
-    nav: Tag, base_url: str
-) -> dict[str, dict[str, str]]:
-    """Parse navigation to get endpoint doc links grouped by sections.
-
-    Args:
-        nav (Tag): 'nav'  HTML element
-        base_url (str): Base URL of Okdesk API documentation
-
-    Returns:
-        dict[str, dict[str, dict[str, str]]]: {
-            "section name": {
-                "endpoint name": "link to documentation"
-            }
-        }
-    """
-    sections_structure: dict[str, dict[str, str]] = {}
-    resource_groups = get_tags_only(nav.find_all(class_="resource-group"))
-    for group in resource_groups:
-        rg_link = group.find(class_="rg-link")
-        if rg_link is None:
-            continue
-        sections_structure[rg_link.text] = _parse_resource_group_data(
-            group, base_url
-        )
-    return sections_structure
-
-
-def get_base_url(url: str) -> str:
+def get_site_base_url(url: str) -> str:
     """Return base url.
 
     Args:
@@ -292,34 +232,24 @@ def get_parsed_api_data(
         api_docs_url (str, optional): Link to documentation site Okdesk API.
 
     Returns:
-        dict: Okdesk API documentation data dictionary
-            or error data dictionary
+        ParseResult: Success with parsed data or error information
     """
-    api_data = {}
-    base_url = get_base_url(api_docs_url)
+    base_url = get_site_base_url(api_docs_url)
     try:
         with requests.Session() as session:
-            okdesk_api_site = session.get(base_url)
-        okdesk_api_site.raise_for_status()
-        soup = BeautifulSoup(okdesk_api_site.text, "html.parser")
-        nav = ensure_tag(soup.find("nav"))
+            okdesk_api_doc_site = session.get(base_url, timeout=TIMEOUT)
+        okdesk_api_doc_site.raise_for_status()
+        soup = BeautifulSoup(okdesk_api_doc_site.text, "html.parser")
         content = ensure_tag(soup.find(class_="content"))
-        navigation_structure = _parse_navigation_structure(nav, base_url)
-        api_data = _get_okdesk_api_data(content, navigation_structure)
-    except requests.RequestException as e:
-        return _create_error_result(f"Network error: {str(e)}")
+        api_data = _parse_content_okdesk_api_doc_site(base_url, content)
+    except requests.Timeout:
+        return _create_error_result("Request timeout")
+    except requests.ConnectionError:
+        return _create_error_result("Connection error")
+    except requests.HTTPError as e:
+        return _create_error_result(f"HTTP error: {e.response.status_code}")
     except (AttributeError, TypeError, ValueError) as e:
         return _create_error_result(f"Parsing error: {str(e)}")
     except Exception as e:
         return _create_error_result(f"Unexpected error: {str(e)}")
     return {"data": api_data}
-
-
-if __name__ == "__main__":
-    okdesk_api_data = get_parsed_api_data()
-    if "traceback" in okdesk_api_data:
-        print(okdesk_api_data["traceback"])
-    else:
-        with open("okdesk_api_data.json", "w", encoding="utf-8") as f:
-            json.dump(okdesk_api_data, f, ensure_ascii=False, indent=4)
-        print("Ready!")
