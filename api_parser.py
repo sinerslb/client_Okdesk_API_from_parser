@@ -14,7 +14,7 @@ Key Features:
 
 Use:
 parse_api_doc_result = parse_the_okdesk_api_documentation_site(
-    link to the website with documentation
+    "link to the website with documentation"
 )
 
 link to the website with documentation - A link to the Okdesk API
@@ -32,9 +32,9 @@ import requests
 from bs4 import BeautifulSoup
 from bs4.element import PageElement, ResultSet, Tag
 
-DEFAULT_API_DOCS_URL = "https://apidocs.okdesk.com/apidoc"
+DEFAULT_API_DOCS_URL: str = "https://apidocs.okdesk.com/apidoc"
 TIMEOUT: int = 10
-pattern_for_check_uri = re.compile(
+pattern_for_check_uri: re.Pattern = re.compile(
     r"""(?x)
     /api/v1/                      # beginning of uri.
     [a-z]{2,}                     # first segment (min 2 letters).
@@ -109,7 +109,7 @@ class EndpointData(NamedTuple):
 
     name: str
     link_to_documentation: str
-    method: str
+    http_method: str
     uri: str
     description: tuple[DescriptionElement, ...]
 
