@@ -146,6 +146,11 @@ class ApiStructure(NamedTuple):
     sections: tuple[SectionData, ...]
 
 
+class ErrorData(NamedTuple):
+    error_text: str
+    traceback_text: str
+
+
 class ParseResult(TypedDict):
     """Result container for API parsing operations.
 
@@ -158,8 +163,7 @@ class ParseResult(TypedDict):
     """
 
     data: NotRequired[ApiStructure]
-    error: NotRequired[str]
-    traceback: NotRequired[str]
+    error: NotRequired[ErrorData]
 
 
 def ensure_tag(element: PageElement | None) -> Tag:
@@ -564,7 +568,7 @@ def get_site_base_url(url: str) -> str:
     return defrag_url.url
 
 
-def _create_error_result(error_message: str) -> ParseResult:
+def _create_error_result(error_message: str) -> ErrorData:
     """
     Create standardized error result structure.
 
@@ -577,7 +581,7 @@ def _create_error_result(error_message: str) -> ParseResult:
     Returns:
         ParseResult: Structured error response
     """
-    return {"error": error_message, "traceback": traceback.format_exc()}
+    return ErrorData(error_message, traceback.format_exc())
 
 
 def parse_the_okdesk_api_documentation_site(
@@ -606,13 +610,17 @@ def parse_the_okdesk_api_documentation_site(
         content = ensure_tag(soup.find(class_="content"))
         api_data = _parse_content_okdesk_api_doc_site(base_url, content)
     except requests.Timeout:
-        return _create_error_result("Request timeout")
+        return {"error": _create_error_result("Request timeout")}
     except requests.ConnectionError:
-        return _create_error_result("Connection error")
+        return {"error": _create_error_result("Connection error")}
     except requests.HTTPError as e:
-        return _create_error_result(f"HTTP error: {e.response.status_code}")
+        return {
+            "error": _create_error_result(
+                f"HTTP error: {e.response.status_code}"
+            )
+        }
     except (AttributeError, TypeError, ValueError) as e:
-        return _create_error_result(f"Parsing error: {str(e)}")
+        return {"error": _create_error_result(f"Parsing error: {str(e)}")}
     except Exception as e:
-        return _create_error_result(f"Unexpected error: {str(e)}")
+        return {"error": _create_error_result(f"Unexpected error: {str(e)}")}
     return {"data": api_data}
