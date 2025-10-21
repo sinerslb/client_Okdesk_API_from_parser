@@ -25,7 +25,14 @@ etc.). Optional.
 
 import re
 import traceback
-from typing import Iterator, Literal, NamedTuple, NotRequired, TypedDict
+from typing import (
+    Iterator,
+    Literal,
+    NamedTuple,
+    NotRequired,
+    TypeAlias,
+    TypedDict,
+)
 from urllib.parse import urldefrag, urljoin
 
 import requests
@@ -98,6 +105,8 @@ class EndpointData(NamedTuple):
 
     Attributes:
         name: Human-readable name of the endpoint (e.g., "Company search")
+        eng_name: The English name of the method that will operate with this
+            endpoint
         link_to_documentation: Direct URL to the documentation
             for this endpoint
         method: HTTP method (GET, POST, PATCH, DELETE)
@@ -108,6 +117,7 @@ class EndpointData(NamedTuple):
     """
 
     name: str
+    eng_name: str
     link_to_documentation: str
     http_method: str
     uri: str
@@ -123,10 +133,13 @@ class SectionData(NamedTuple):
 
     Attributes:
         name: The section name (e.g., "Ticket management")
+        eng_name: The English name of the class that this section will
+            represent
         endpoints: All API endpoints belonging to this section
     """
 
     name: str
+    eng_name: str
     endpoints: tuple[EndpointData, ...]
 
 
@@ -147,6 +160,13 @@ class ApiStructure(NamedTuple):
 
 
 class ErrorData(NamedTuple):
+    """Structured container for error information.
+
+    Attributes:
+        error_text: Human-readable error description
+        traceback_text: Detailed technical traceback information
+    """
+
     error_text: str
     traceback_text: str
 
@@ -164,6 +184,26 @@ class ParseResult(TypedDict):
 
     data: NotRequired[ApiStructure]
     error: NotRequired[ErrorData]
+
+
+class EngNames(NamedTuple):
+    """Container for English names of API sections and endpoints.
+
+    Used to maintain consistent English naming across different language
+    versions of the documentation. This ensures generated code uses
+    standardized English identifiers regardless of the source language.
+
+    Attributes:
+        eng_section_name: English name of the API section (e.g., "Companies")
+        eng_endpoint_name: English name of the endpoint method
+                          (e.g., "search_companies")
+    """
+
+    eng_section_name: str | None
+    eng_endpoint_name: str
+
+
+NamingData: TypeAlias = dict[tuple[str, str], EngNames]
 
 
 def ensure_tag(element: PageElement | None) -> Tag:
@@ -384,7 +424,7 @@ def _extract_endpoint_metadata(
             container
 
     Returns:
-        tuple[str, str, str]: (endpoint_name, http_method, uri)
+        tuple: (endpoint_name, http_method, uri)
 
     Raises:
         ValueError: If header structure doesn't contain expected elements
@@ -432,7 +472,9 @@ def _validate_endpoint_children(
         raise ValueError(value_error_text)
 
 
-def _parse_endpoint(endpoint: Tag, base_url: str) -> EndpointData:
+def _parse_endpoint(
+    endpoint: Tag, base_url: str, eng_names: NamingData
+) -> EndpointData:
     """Parse complete endpoint element into structured data.
 
     Processes a full endpoint definition including:
@@ -454,8 +496,10 @@ def _parse_endpoint(endpoint: Tag, base_url: str) -> EndpointData:
         endpoint_children[:2]
     )
     endpoint_doc_link = urljoin(base_url, f"#!{endpoint.get('id', '')}")
+    eng_naming_data = eng_names[(ep_uri, ep_http_method)]
     return EndpointData(
         ep_name,
+        eng_naming_data.eng_endpoint_name,
         endpoint_doc_link,
         ep_http_method,
         ep_uri,
@@ -491,7 +535,11 @@ def _extract_section_name(section_element: Tag) -> str:
         raise ValueError(value_error_text)
 
 
-def _parse_section(section_element: Tag, base_url: str) -> SectionData:
+def _parse_section(
+    section_element: Tag,
+    base_url: str,
+    eng_names: NamingData,
+) -> SectionData:
     """Parse complete documentation section with all endpoints.
 
     Processes a section element to extract its name and parse all contained
@@ -500,6 +548,7 @@ def _parse_section(section_element: Tag, base_url: str) -> SectionData:
     Args:
         section_element: BeautifulSoup Tag of a section element
         base_url: Base URL for endpoint documentation links
+        eng_names: Mapping of URI/method combinations to English names
 
     Returns:
         SectionData: Complete structured section data
@@ -507,9 +556,20 @@ def _parse_section(section_element: Tag, base_url: str) -> SectionData:
     endpoints_data: list[EndpointData] = []
     section_name = _extract_section_name(section_element)
     endpoints = get_tags_only(section_element.find_all(class_="action"))
+    if not endpoints:
+        raise ValueError(f"Section '{section_name}' contains no endpoints")
     for endpoint in endpoints:
-        endpoints_data.append(_parse_endpoint(endpoint, base_url))
-    return SectionData(section_name, tuple(endpoints_data))
+        endpoints_data.append(_parse_endpoint(endpoint, base_url, eng_names))
+    # get eng section name from first endpoint (others - None )
+    first_endpoint = endpoints_data[0]
+    naming_data = eng_names[(first_endpoint.uri, first_endpoint.http_method)]
+    if naming_data.eng_section_name is None:
+        raise TypeError(
+            f"English section name not found for section: {section_name}"
+        )
+    return SectionData(
+        section_name, naming_data.eng_section_name, tuple(endpoints_data)
+    )
 
 
 def _extract_api_base_url(content: Tag) -> str:
@@ -530,7 +590,7 @@ def _extract_api_base_url(content: Tag) -> str:
 
 
 def _parse_content_okdesk_api_doc_site(
-    base_url: str, content: Tag
+    base_url: str, content: Tag, eng_names: NamingData
 ) -> ApiStructure:
     """Parse complete Okdesk API documentation structure.
 
@@ -540,6 +600,7 @@ def _parse_content_okdesk_api_doc_site(
     Args:
         base_url: Base URL of the documentation site
         content: BeautifulSoup Tag of the main content div
+        eng_names: Mapping of URI/method combinations to English names
 
     Returns:
         ApiStructure: Complete parsed API documentation structure
@@ -548,7 +609,7 @@ def _parse_content_okdesk_api_doc_site(
     api_base_url = _extract_api_base_url(content)
     sections = get_tags_only(content.find_all("section"))
     for section in sections:
-        api_data.append(_parse_section(section, base_url))
+        api_data.append(_parse_section(section, base_url, eng_names))
     return ApiStructure(api_base_url, tuple(api_data))
 
 
@@ -584,31 +645,96 @@ def _create_error_result(error_message: str) -> ErrorData:
     return ErrorData(error_message, traceback.format_exc())
 
 
+def _get_eng_names_for_class_and_method_names(
+    content: Tag,
+) -> NamingData:
+    """Extract English names for sections and endpoints.
+
+    Processes the English version of the documentation to match (URI, HTTP
+    method) with the English names of sections and endpoints. This information
+    will be used later to name the classes and their methods that make up the
+    sections of API client .
+
+    Args:
+        content: BeautifulSoup Tag of the main content div, from English docs
+
+    Returns:
+        NamingData: Dictionary mapping (uri, http_method) to EngNames
+    """
+    naming_data: NamingData = {}
+    sections = get_tags_only(content.find_all("section"))
+    for section in sections:
+        section_name_received = False
+        actions = get_tags_only(section.find_all("div", class_="action"))
+        for action in actions:
+            if section_name_received:
+                section_name = None
+            else:
+                section_name = _extract_section_name(section)
+                section_name_received = True
+            action_children = get_tags_only(action.children)
+            endpoint_name, http_method, uri = _extract_endpoint_metadata(
+                action_children[:2]
+            )
+            naming_data[(uri, http_method)] = EngNames(
+                section_name, endpoint_name
+            )
+    return naming_data
+
+
+def _get_content_api_docs_site(url: str) -> Tag:
+    """Fetch and parse API documentation site content.
+
+    Retrieves the HTML content from the specified URL and extracts
+    the main content area for further processing.
+
+    Args:
+        url: URL of the API documentation site to fetch
+
+    Returns:
+        Tag: BeautifulSoup Tag of the main content div
+
+    Raises:
+        requests.RequestException: If network request fails
+    """
+    with requests.Session() as session:
+        okdesk_api_doc_site = session.get(url, timeout=TIMEOUT)
+    okdesk_api_doc_site.raise_for_status()
+    soup = BeautifulSoup(okdesk_api_doc_site.text, "html.parser")
+    content = ensure_tag(soup.find(class_="content"))
+    return content
+
+
 def parse_the_okdesk_api_documentation_site(
     api_docs_url: str = DEFAULT_API_DOCS_URL,
 ) -> ParseResult:
     """Main function to parse Okdesk API documentation.
 
     Orchestrates the complete parsing workflow:
-    1. Fetches documentation HTML from specified URL
-    2. Parses content with BeautifulSoup
-    3. Extracts structured API data with validation
-    4. Handles errors gracefully with reporting
+    1. Fetches English documentation for name mapping
+    2. Fetches target language documentation for content
+    3. Extracts structured API data with bilingual naming
+    4. Handles errors gracefully with detailed reporting
 
     Args:
-        api_docs_url: URL of Okdesk API documentation site
+        api_docs_url: URL of Okdesk API documentation site in any language.
+                     If not provided, uses English version by default.
 
     Returns:
-        ParseResult: Success with parsed data or error information
+        ParseResult: Success with parsed data or error information.
+                    Data includes both original language and English names.
     """
-    base_url = get_site_base_url(api_docs_url)
     try:
-        with requests.Session() as session:
-            okdesk_api_doc_site = session.get(base_url, timeout=TIMEOUT)
-        okdesk_api_doc_site.raise_for_status()
-        soup = BeautifulSoup(okdesk_api_doc_site.text, "html.parser")
-        content = ensure_tag(soup.find(class_="content"))
-        api_data = _parse_content_okdesk_api_doc_site(base_url, content)
+        api_docs_base_url = get_site_base_url(api_docs_url)
+        eng_content = _get_content_api_docs_site(DEFAULT_API_DOCS_URL)
+        eng_names = _get_eng_names_for_class_and_method_names(eng_content)
+        if api_docs_base_url == DEFAULT_API_DOCS_URL:
+            content = eng_content
+        else:
+            content = _get_content_api_docs_site(api_docs_base_url)
+        api_data = _parse_content_okdesk_api_doc_site(
+            api_docs_base_url, content, eng_names
+        )
     except requests.Timeout:
         return {"error": _create_error_result("Request timeout")}
     except requests.ConnectionError:
