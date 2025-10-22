@@ -1,0 +1,103 @@
+"""Okdesk API client.
+
+Use example:
+
+okdesk_api = OkdeskAPI("my_account", "my_login", "my_password")
+list_of_groups = okdesk_api.employees.receiving_agents_groups()
+params = {
+    "created_since": "22-03-2025 15:30",
+    "created_until": "22-06-2025 18:00",
+    "assignee_ids": [5],
+    "page[number]": 2,
+    "page[size]": 30
+}
+my_tickets = okdesk_api.tickets.obtaining_detailed_list_by_parameters(params)
+"""
+
+import requests
+
+
+class NotCorrectAnswer(Exception):
+
+    def __init__(self, response_data: dict, status_code: int):
+        self.status_code = status_code
+        self.message = response_data.get("errors", "Unexpected error!")
+
+    def __str__(self):
+        return f"{self.message},\nHTTP code: {self.status_code}."
+
+
+{% for section in sections %}
+class {{ section.class_name }}:
+    """{{ section.name }}."""
+
+    def __init__(self, agregator) -> None:
+        self.agregator: OkdeskAPI = agregator
+
+{% for endpoint in section.endpoints %}
+    def {{ endpoint.method_name }}(
+            self{{ endpoint.string_of_args}}
+    ):
+        """{{ endpoint.name }}.
+
+        {{ endpoint.link_to_documentation }}
+        """
+        return self.agregator._make_request(
+            "{{ endpoint.http_method }}", f"{{ endpoint.uri }}"{{ endpoint.params }}
+        )
+
+{% endfor %}
+
+{% endfor %}
+
+class OkdeskAPI:
+    api_token: str | None = None
+    base_url: str | None = None
+
+    def __init__(
+            self, account: str, login: str, password: str
+    ):
+        """
+        :param account: Company account (subdomain)
+        :param login: User login
+        :param password: User password
+        """
+{% for section in sections %}
+        self.{{ section.agregator_attr_name }} = {{ section.class_name }}(self)
+{% endfor %}
+        self.base_url = f'{{ base_url }}'
+        self._get_api_token(login, password)
+
+    def _get_api_token(
+            self, login, password
+    ):
+        """Returns the API token."""
+        param = {"login": login, "password": password}
+        response = self._make_request("POST", "/api/v1/users/sign_in", param)
+        self.api_token = response["api_key"]
+
+    def _make_request(
+            self, method: str, endpoint: str, params: dict = {}
+    ):
+        """
+        Basic method of API queries.
+
+        :param method: HTTP method (GET, POST, etc.).
+        :param endpoint: API endpoint.
+        :param params: Request parameters
+        """
+        url = f"{self.base_url}/{endpoint}"
+        params["api_token"] = self.api_token
+        headers = {"Content-Type": "application/json"}
+
+        with requests.Session() as session:
+            response = session.request(
+                method=method, url=url, headers=headers, params=params
+            )
+        response_data = response.json()
+        if (
+            response.status_code not in [200, 201, 204]
+            or "errors" in response_data
+        ):
+            raise NotCorrectAnswer(response_data, response.status_code)
+        return response_data
