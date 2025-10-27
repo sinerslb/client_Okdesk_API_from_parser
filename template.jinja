@@ -1,6 +1,6 @@
 """Okdesk API client.
 
-Use example:
+Use:
 
 okdesk_api = OkdeskAPI("my_account", "my_login", "my_password")
 list_of_groups = okdesk_api.employees.receiving_agents_groups()
@@ -31,19 +31,19 @@ class NotCorrectAnswer(Exception):
 class {{ section.class_name }}:
     """{{ section.name }}."""
 
-    def __init__(self, agregator) -> None:
-        self.agregator: OkdeskAPI = agregator
+    def __init__(self, aggregator) -> None:
+        self.aggregator: OkdeskAPI = aggregator
 
 {% for endpoint in section.endpoints %}
     def {{ endpoint.method_name }}(
-            self{{ endpoint.string_of_args}}
+            self{{ endpoint.method_args_string}}
     ):
         """{{ endpoint.name }}.
 
         {{ endpoint.link_to_documentation }}
         """
-        return self.agregator._make_request(
-            "{{ endpoint.http_method }}", f"{{ endpoint.uri }}"{{ endpoint.params }}
+        return self.aggregator._make_request(
+            "{{ endpoint.http_method }}", f"{{ endpoint.path }}"{{ endpoint.params }}
         )
 
 {% endfor %}
@@ -63,7 +63,7 @@ class OkdeskAPI:
         :param password: User password
         """
 {% for section in sections %}
-        self.{{ section.agregator_attr_name }} = {{ section.class_name }}(self)
+        self.{{ section.aggregator_attr_name }} = {{ section.class_name }}(self)
 {% endfor %}
         self.base_url = f'{{ base_url }}'
         self._get_api_token(login, password)
