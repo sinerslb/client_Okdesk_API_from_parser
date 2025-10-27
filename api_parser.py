@@ -109,7 +109,7 @@ class EndpointData(NamedTuple):
             endpoint
         link_to_documentation: Direct URL to the documentation
             for this endpoint
-        method: HTTP method (GET, POST, PATCH, DELETE)
+        http_method: HTTP method (GET, POST, PATCH, DELETE)
         uri: API endpoint URI with parameters
             (e.g., "/api/v1/companies/{company_id}{?api_token}")
         description: Structured description containing
