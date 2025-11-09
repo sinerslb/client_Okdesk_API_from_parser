@@ -1,9 +1,21 @@
 """Okdesk API client.
 
-Use:
+Automatically generated client for working with Okdesk API.
+Contains methods for all available endpoints from documentation.
 
-okdesk_api = OkdeskAPI("my_account", "my_login", "my_password")
+- Each documentation section is represented by separate class
+- Each endpoint - method of corresponding class
+- API error processing
+
+Usage:
+
+# Initialize client
+okdesk_api = OkdeskAPI("your_company_account", "your_login", "your_password")
+
+# Get list of recipient groups
 list_of_groups = okdesk_api.employees.receiving_agents_groups()
+
+# Working with parameters
 params = {
     "created_since": "22-03-2025 15:30",
     "created_until": "22-06-2025 18:00",
@@ -18,6 +30,7 @@ import requests
 
 
 class NotCorrectAnswer(Exception):
+    """Exception for Okdesk API errors."""
 
     def __init__(self, response_data: dict, status_code: int):
         self.status_code = status_code
@@ -27,6 +40,7 @@ class NotCorrectAnswer(Exception):
         return f"{self.message},\nHTTP code: {self.status_code}."
 
 
+{# Generate classes for each API section #}
 {% for section in sections %}
 class {{ section.class_name }}:
     """{{ section.name }}."""
@@ -34,7 +48,8 @@ class {{ section.class_name }}:
     def __init__(self, aggregator) -> None:
         self.aggregator: OkdeskAPI = aggregator
 
-{% for endpoint in section.endpoints %}
+    {# Generate methods for each endpoint in section #}
+    {%- for endpoint in section.endpoints -%}
     def {{ endpoint.method_name }}(
             self{{ endpoint.method_args_string}}
     ):
@@ -42,15 +57,22 @@ class {{ section.class_name }}:
 
         {{ endpoint.link_to_documentation }}
         """
-        return self.aggregator._make_request(
+        return self.aggregator._send_request(
             "{{ endpoint.http_method }}", f"{{ endpoint.path }}"{{ endpoint.params }}
         )
 
-{% endfor %}
+    {% endfor %}
 
 {% endfor %}
+
 
 class OkdeskAPI:
+    """Main Okdesk API client class.
+
+    Automatically initializes all API sections as attributes.
+    Handles authentication and request execution.
+    """
+
     api_token: str | None = None
     base_url: str | None = None
 
@@ -62,29 +84,33 @@ class OkdeskAPI:
         :param login: User login
         :param password: User password
         """
-{% for section in sections %}
+        {# Initialize all API sections #}
+        {%- for section in sections -%}
         self.{{ section.aggregator_attr_name }} = {{ section.class_name }}(self)
-{% endfor %}
+        {% endfor %}
+
         self.base_url = f'{{ base_url }}'
         self._get_api_token(login, password)
 
     def _get_api_token(
-            self, login, password
-    ):
-        """Returns the API token."""
+            self, login: str, password: str
+    ) -> None:
+        """Get API token using login and password."""
         param = {"login": login, "password": password}
-        response = self._make_request("POST", "/api/v1/users/sign_in", param)
+        response = self._send_request("POST", "/api/v1/users/sign_in", param)
         self.api_token = response["api_key"]
 
-    def _make_request(
+    def _send_request(
             self, method: str, endpoint: str, params: dict = {}
-    ):
+    ) -> dict:
         """
-        Basic method of API queries.
+        Base method for executing API requests.
 
-        :param method: HTTP method (GET, POST, etc.).
-        :param endpoint: API endpoint.
+        :param method: HTTP method (GET, POST, etc.)
+        :param endpoint: API endpoint
         :param params: Request parameters
+        :return: API response in JSON format
+        :raises NotCorrectAnswer: On API errors
         """
         url = f"{self.base_url}/{endpoint}"
         params["api_token"] = self.api_token
@@ -95,8 +121,11 @@ class OkdeskAPI:
                 method=method, url=url, headers=headers, params=params
             )
         response_data = response.json()
+
+        # Check for HTTP errors and business logic errors
         if (
-            response.status_code not in [200, 201, 204]
+            response.status_code < 200
+            or response.status_code > 299
             or "errors" in response_data
         ):
             raise NotCorrectAnswer(response_data, response.status_code)
